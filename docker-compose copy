@@ -4,10 +4,10 @@ services:
     container_name: elasticsearch
     environment:
       - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms${ES_MEM} -Xmx${ES_MEM}"
+      - "ES_JAVA_OPTS=-Xms${ES_MEM} -Xmx${ES_MEM}"   # .env file should define ES_MEM
       - discovery.type=single-node
       - TZ=Asia/Seoul
-    mem_limit: ${ES_MEM_LIMIT:-1792m}
+    mem_limit: ${ES_MEM_LIMIT:-1792m}  # 환경변수로 변경
     ports:
       - "9200:9200"
     healthcheck:
@@ -65,9 +65,11 @@ services:
     environment:
       - KC_HEAP=${KC_HEAP}
       - TZ=Asia/Seoul
-      - KEYCLOAK_ADMIN=admin
-      - KEYCLOAK_ADMIN_PASSWORD=admin
-      - KC_DB=dev-mem
+      - KEYCLOAK_ADMIN=admin           # <- 반드시 추가
+      - KEYCLOAK_ADMIN_PASSWORD=admin  # <- 반드시 추가
+      - KC_DB=dev-mem                  # <- 테스트용 인메모리 DB, 필요시 삭제/변경
+      # - KC_HOSTNAME=localhost        # 필요시
+      # 기타 환경변수 추가 가능
     mem_limit: ${KC_MEM_LIMIT}
     ports:
       - "8080:8080"
@@ -76,7 +78,7 @@ services:
       - ./docker/keycloak/data:/opt/keycloak/data
       - /etc/localtime:/etc/localtime:ro
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
-    command: start-dev
+    command: start-dev                 # <- 이 부분 반드시 추가!
     networks:
       - backend      
 
@@ -89,34 +91,30 @@ services:
     ports:
       - "8200:8200"
     environment:
+      VAULT_LOCAL_CONFIG: |
+        {
+          "storage": {"file": {"path": "/vault/file"}},
+          "listener": [
+            {"tcp": { "address": "0.0.0.0:8200", "tls_cert_file": "/vault/certs/vault.crt", "tls_key_file": "/vault/certs/vault.key"}}
+          ],
+          "default_lease_ttl": "168h",
+          "max_lease_ttl": "720h",
+          "ui": true
+        }
+      VAULT_API_ADDR: "https://vault:8200"   # <--- 이 줄만 추가    
       TZ: Asia/Seoul
-      SOFTHSM2_CONF: /etc/softhsm2.conf       # ← 소프트HSM conf 강제 인식
-      VAULT_LOCAL_CONFIG_PATH: /vault/vault.hcl       # ← vault.hcl 자동 인식용
-      VAULT_API_ADDR: "https://vault:8200"
     volumes:      
       - ./docker/vault/file:/vault/file
-      - ./docker/vault/certs:/vault/certs
-      - ./docker/vault/vault.hcl:/vault/vault.hcl
-      - ./docker/softhsm/tokens:/softhsm/tokens
-      - ./docker/softhsm/softhsm2.conf:/etc/softhsm2.conf
+      - ./docker/vault/config:/vault/config
+      - ./docker/vault/certs:/vault/certs          
       - /etc/localtime:/etc/localtime:ro
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     command: >
-      vault server -config=/vault/vault.hcl           # ← vault.hcl 직접 사용!
-    depends_on:
-      - softhsm
-    networks:
-      - backend
-
-  softhsm:
-    image: softhsm2:local                             # ← 직접 빌드한 이미지 사용
-    container_name: softhsm
-    environment:
-      SOFTHSM2_CONF: /etc/softhsm2.conf       # ← 컨테이너 내부 conf 일치
-    volumes:
-      - ./docker/softhsm/tokens:/softhsm/tokens
-      - ./docker/softhsm/softhsm2.conf:/etc/softhsm2.conf
-    restart: unless-stopped
+      sh -c "
+        cp /vault/certs/vault.crt /etc/ssl/certs/vault.crt 2>/dev/null || true;
+        cat /vault/certs/vault.crt >> /etc/ssl/certs/ca-certificates.crt 2>/dev/null || true;
+        vault server -config=/vault/config/local.json
+      "
     networks:
       - backend
 
@@ -136,6 +134,19 @@ services:
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     networks:
       - backend
+
+  softhsm:
+    build:
+      context: ./docker/softhsm
+    image: softhsm2:local
+    container_name: softhsm
+    volumes:
+      - ./docker/softhsm/data:/var/lib/softhsm
+      - ./docker/softhsm/config:/etc/softhsm
+    restart: unless-stopped
+
+
+
 
 networks:
   elknet:
